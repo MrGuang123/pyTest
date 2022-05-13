@@ -3,10 +3,18 @@ import logging
 import re
 from urllib.parse import urljoin
 
+import json
+from os import makedirs
+from os.path import exists
+
+import multiprocessing
+
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 BASE_URL = 'https://ssr1.scrape.center'
 TOTAL_PAGE = 10
+RESULT_DIR = 'results'
+exists(RESULT_DIR) or makedirs(RESULT_DIR)
 
 
 def scrape_page(url):
@@ -37,12 +45,69 @@ def parse_index(html):
         yield detail_url
 
 
-def main():
-    for page in range(1, TOTAL_PAGE + 1):
-        index_html = scrape_index(page)
-        detail_urls = parse_index(index_html)
-        logging.info('detail urls %s', list(detail_urls))
+def scrape_detail(url):
+    return scrape_page(url)
+
+# .*?为非贪婪通用匹配：尽可能少的匹配，一旦发现匹配成功则不继续进行匹配
+
+
+def parse_detail(html):
+    cover_pattern = re.compile(
+        'class="item.*?<img.*?src="(.*?)".*?class="cover"', re.S)
+    name_partten = re.compile('<h2.*?>(.*?)</h2>')
+    categories_pattern = re.compile(
+        '<button.*?category.*?<span>(.*?)</span>.*?</button>', re.S)
+    publised_at_pattern = re.compile('(\d{4}-\d{2}-\d{2})\s?上映')
+    drama_pattern = re.compile('<div.*?drama.*?>.*?<p.*?>(.*?)</p>', re.S)
+    score_pattern = re.compile('<p.*?score.*?>(.*?)</p>', re.S)
+
+    cover = re.search(cover_pattern, html).group(
+        1).strip() if re.search(cover_pattern, html) else None
+    name = re.search(name_partten, html).group(
+        1).strip() if re.search(name_partten, html) else None
+    categories = re.findall(categories_pattern, html) if re.search(
+        categories_pattern, html) else None
+    published_at = re.search(publised_at_pattern, html).group(
+        1) if re.search(publised_at_pattern, html) else None
+    drama = re.search(drama_pattern, html).group(
+        1).strip() if re.search(drama_pattern, html) else None
+    score = float(re.search(score_pattern, html).group(1).strip()
+                  ) if re.search(score_pattern, html) else None
+
+    return {
+        'cover': cover,
+        'name': name,
+        'categories': categories,
+        'published_at': published_at,
+        'drama': drama,
+        'score': score
+    }
+
+
+def save_data(data):
+    name = data.get('name')
+    data_path = f'{RESULT_DIR}/{name}.json'
+    json.dump(data, open(data_path, 'w', encoding='utf-8'),
+              ensure_ascii=False, indent=2)
+
+
+def main(page):
+    index_html = scrape_index(page)
+    detail_urls = parse_index(index_html)
+
+    for detail_url in detail_urls:
+        detail_html = scrape_detail(detail_url)
+        data = parse_detail(detail_html)
+        # logging.info('get detail data %s', data.name)
+        logging.info('saving data to json file')
+        save_data(data)
+        logging.info('data saved successfully')
 
 
 if __name__ == '__main__':
-    main()
+    pool = multiprocessing.Pool()
+    pages = range(1, TOTAL_PAGE + 1)
+    pool.map(main, pages)
+    pool.close()
+    pool.join()
+    # main()
